@@ -2,7 +2,7 @@
 use crate::{
     Error,
     config::Config,
-    plan::{ApplyResult, Plan, Project, Timesheet},
+    timesheet::{Project, Timesheet},
 };
 use regex::Regex;
 use reqwest::{
@@ -22,26 +22,8 @@ pub struct Client {
     config: Config,
     employee_id: String,
 }
-#[derive(Clone)]
-struct Cell {
-    project: String,
-    p: usize,
-    a: usize,
-    d: usize,
-    value: Value,
-    writable: bool,
-}
-struct Snapshot {
-    sheet: Timesheet,
-    cells: BTreeMap<(String, String), Cell>,
-}
 fn protocol(message: impl Into<String>) -> Error {
     Error::Protocol {
-        message: message.into(),
-    }
-}
-fn conflict(message: impl Into<String>) -> Error {
-    Error::Conflict {
         message: message.into(),
     }
 }
@@ -146,10 +128,10 @@ impl Client {
         body(r, "read")
     }
     pub fn timesheet(&self, month: &str) -> Result<Timesheet, Error> {
-        Ok(self.snapshot(month)?.sheet)
+        self.snapshot(month)
     }
-    fn snapshot(&self, month: &str) -> Result<Snapshot, Error> {
-        crate::plan::validate_month(month)?;
+    fn snapshot(&self, month: &str) -> Result<Timesheet, Error> {
+        crate::timesheet::validate_month(month)?;
         let (year, m) = month
             .split_once('-')
             .ok_or_else(|| protocol("invalid month"))?;
@@ -175,112 +157,9 @@ impl Client {
         let html = body(r, "timesheet read")?;
         parse_grid(&html, &self.config.base_url, &self.employee_id, month)
     }
-    pub fn apply(&self, plan: &Plan) -> Result<ApplyResult, Error> {
-        plan.validate()?;
-        if plan.base_url != self.config.base_url || plan.employee_id != self.employee_id {
-            return Err(conflict(
-                "plan belongs to a different Yoobi origin or employee",
-            ));
-        }
-        let before = self.snapshot(&plan.month)?;
-        let project = before
-            .sheet
-            .projects
-            .iter()
-            .find(|p| p.id == plan.project_id)
-            .ok_or_else(|| conflict("booking activity no longer exists"))?;
-        let mut payload = Vec::new();
-        for day in &plan.days {
-            let cell = before
-                .cells
-                .get(&(plan.project_id.clone(), day.date.clone()))
-                .ok_or_else(|| conflict(format!("{} is missing from the timesheet", day.date)))?;
-            let minutes = *project
-                .days
-                .get(&day.date)
-                .ok_or_else(|| conflict("missing day"))?;
-            let desired = u32::from(day.hours) * 60;
-            if minutes == desired {
-                continue;
-            }
-            if minutes != day.before_minutes {
-                return Err(conflict(format!(
-                    "{} changed since the plan was created",
-                    day.date
-                )));
-            }
-            if !cell.writable {
-                return Err(conflict(format!(
-                    "{} is locked or requires unsupported booking details",
-                    day.date
-                )));
-            }
-            let diff = f64::from(desired) / 60.0 - f64::from(minutes) / 60.0;
-            payload.push(json!({"key":format!("{}-{}",plan.project_id,day.date),"value":[{
-                "time":day.hours,"timeMsg":cell.value.get("timeMsg").cloned().unwrap_or(json!("")),
-                "p":cell.p,"a":cell.a,"d":cell.d,"ref":cell.value.get("ref").cloned().unwrap_or(json!("")),
-                "timediff":diff,"pID":cell.project,"bFromPlanning":false,"timedifforiginal":diff
-            }]}));
-        }
-        let count = payload.len();
-        if count > 0 {
-            let response=self.http.post(format!("{}/declaration/saveDeclarations",self.config.base_url))
-                .form(&[("json",json!(payload).to_string()),("employeeID",self.employee_id.clone()),("directSave","true".into())])
-                .send().map_err(|_|Error::Network {message:"Yoobi save was interrupted; some entries may have been saved. Read the timesheet before retrying".into()})?;
-            let value: Value =
-                serde_json::from_str(&body(response, "save (entries may already have changed)")?)
-                    .map_err(|_| {
-                    protocol("unrecognized save response; read the timesheet before retrying")
-                })?;
-            let messages = value["messages"]
-                .as_array()
-                .filter(|m| !m.is_empty())
-                .ok_or_else(|| {
-                    protocol(
-                        "save response has no acknowledgement; read the timesheet before retrying",
-                    )
-                })?;
-            if messages.iter().any(|m| m["type"] != "success") {
-                return Err(conflict(
-                    "Yoobi rejected all or part of the save; read the timesheet before retrying",
-                ));
-            }
-        }
-        let after = self.snapshot(&plan.month)?.sheet;
-        let mut expected = before.sheet;
-        let project = expected
-            .projects
-            .iter_mut()
-            .find(|p| p.id == plan.project_id)
-            .expect("validated project");
-        for day in &plan.days {
-            project
-                .days
-                .insert(day.date.clone(), u32::from(day.hours) * 60);
-        }
-        // Names and lock states can change independently. Check every booking, including untargeted days.
-        if after.projects.len() != expected.projects.len()
-            || after.projects.iter().any(|p| {
-                expected
-                    .projects
-                    .iter()
-                    .find(|e| e.id == p.id)
-                    .is_none_or(|e| e.days != p.days)
-            })
-        {
-            return Err(conflict(
-                "saved timesheet does not match the plan or another booking changed; inspect it before retrying",
-            ));
-        }
-        Ok(ApplyResult {
-            verified: true,
-            changed_days: count,
-            timesheet: after,
-        })
-    }
 }
 
-fn parse_grid(html: &str, base: &str, employee: &str, month: &str) -> Result<Snapshot, Error> {
+fn parse_grid(html: &str, base: &str, employee: &str, month: &str) -> Result<Timesheet, Error> {
     let doc = Html::parse_document(html);
     let node = doc.select(&selector("#stData")).next().ok_or_else(|| {
         protocol("Yoobi did not return timesheet data; session expired or format changed")
@@ -292,7 +171,7 @@ fn parse_grid(html: &str, base: &str, employee: &str, month: &str) -> Result<Sna
         .ok_or_else(|| protocol("missing timesheet projects"))?;
     let date_re = Regex::new(r"date:\s*'(\d{4}-\d{2}-\d{2})'").expect("constant date regex");
     let mut projects = Vec::new();
-    let mut cells = BTreeMap::new();
+    let mut activity_dates = BTreeSet::new();
     let mut total = 0u32;
     for (p, raw) in raw_projects.iter().enumerate().skip(1) {
         let project_id = raw["pID"]
@@ -324,10 +203,6 @@ fn parse_grid(html: &str, base: &str, employee: &str, month: &str) -> Result<Sna
                     "only hour-based timesheet activities are supported",
                 ));
             }
-            let restricted = act["allowOvertime"].as_i64().unwrap_or(0) != 0
-                || !act["defaultOvertimeID"].as_str().unwrap_or("").is_empty()
-                || cls.contains("bNoteRequired:true")
-                || !cls.contains("alttype:[]");
             let mut locks = BTreeSet::new();
             let mut seen = BTreeSet::new();
             for cell in row.select(&selector("div.cell")) {
@@ -339,10 +214,9 @@ fn parse_grid(html: &str, base: &str, employee: &str, month: &str) -> Result<Sna
                 if !seen.insert(date.clone()) {
                     return Err(protocol("duplicate timesheet day"));
                 }
-                if restricted
-                    || class
-                        .split_whitespace()
-                        .any(|c| matches!(c, "disabled" | "closed" | "approved" | "wasApproved"))
+                if class
+                    .split_whitespace()
+                    .any(|c| matches!(c, "disabled" | "closed" | "approved" | "wasApproved"))
                     || cell
                         .value()
                         .attr("data-warn")
@@ -352,11 +226,10 @@ fn parse_grid(html: &str, base: &str, employee: &str, month: &str) -> Result<Sna
                 }
             }
             let mut days = BTreeMap::new();
-            for (d, entry) in act["decl"]
+            for entry in act["decl"]
                 .as_array()
                 .ok_or_else(|| protocol("missing declarations"))?
                 .iter()
-                .enumerate()
                 .skip(1)
             {
                 let date = entry["dtdate"]
@@ -365,7 +238,7 @@ fn parse_grid(html: &str, base: &str, employee: &str, month: &str) -> Result<Sna
                 if !date.starts_with(&format!("{month}-")) {
                     continue;
                 }
-                crate::plan::validate_date(date)?;
+                crate::timesheet::validate_date(date)?;
                 if !seen.contains(date) {
                     return Err(protocol("declaration missing from rendered grid"));
                 }
@@ -376,24 +249,11 @@ fn parse_grid(html: &str, base: &str, employee: &str, month: &str) -> Result<Sna
                 total = total
                     .checked_add(minutes)
                     .ok_or_else(|| protocol("timesheet total overflow"))?;
-                if cells
-                    .insert(
-                        (id.clone(), date.to_owned()),
-                        Cell {
-                            project: project_id.to_owned(),
-                            p,
-                            a,
-                            d,
-                            value: entry.clone(),
-                            writable: !locks.contains(date),
-                        },
-                    )
-                    .is_some()
-                {
+                if !activity_dates.insert((id.clone(), date.to_owned())) {
                     return Err(protocol("ambiguous activity ID"));
                 }
             }
-            let month_days = crate::plan::days_in_month(month)?;
+            let month_days = crate::timesheet::days_in_month(month)?;
             if days.len() != month_days as usize {
                 return Err(protocol(
                     "timesheet grid does not cover the requested month",
@@ -426,14 +286,11 @@ fn parse_grid(html: &str, base: &str, employee: &str, month: &str) -> Result<Sna
     if total != official || visible != official {
         return Err(protocol("Yoobi month total disagrees with daily entries"));
     }
-    Ok(Snapshot {
-        sheet: Timesheet {
-            base_url: base.into(),
-            employee_id: employee.into(),
-            month: month.into(),
-            total_minutes: official,
-            projects,
-        },
-        cells,
+    Ok(Timesheet {
+        base_url: base.into(),
+        employee_id: employee.into(),
+        month: month.into(),
+        total_minutes: official,
+        projects,
     })
 }

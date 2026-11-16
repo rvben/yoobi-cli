@@ -16,8 +16,6 @@ pub enum Error {
     #[error("{message}")]
     Protocol { message: String },
     #[error("{message}")]
-    Conflict { message: String },
-    #[error("{message}")]
     Io { message: String },
 }
 
@@ -30,7 +28,6 @@ impl Error {
             Self::Auth { .. } => "auth",
             Self::Network { .. } => "network",
             Self::Protocol { .. } => "protocol",
-            Self::Conflict { .. } => "conflict",
             Self::Io { .. } => "io",
         }
     }
@@ -40,11 +37,8 @@ impl Error {
             Self::Auth { .. } => Some(
                 "run `yoobi-cli auth login`, or set YOOBI_BASE_URL, YOOBI_USERNAME, and a password source",
             ),
-            Self::Conflict { .. } => {
-                Some("read the timesheet and generate a new plan; do not blindly retry a write")
-            }
             Self::Network { .. } | Self::Protocol { .. } => {
-                Some("after an interrupted apply, read the timesheet before retrying")
+                Some("check the connection and Yoobi availability before retrying")
             }
             Self::TtyRequired { .. } => Some(
                 "run the interactive command in a terminal; scripts can use auth login --password-stdin or tui --demo --snapshot",
@@ -57,7 +51,6 @@ impl Error {
             Self::Usage { .. } => 3,
             Self::TtyRequired { .. } => 6,
             Self::Auth { .. } => 4,
-            Self::Conflict { .. } => 5,
             _ => 1,
         }
     }

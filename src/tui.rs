@@ -1,10 +1,10 @@
-//! Read-only terminal workspace. The save API is intentionally absent here.
+//! Read-only terminal workspace for Yoobi bookings.
 use crate::{
     Error,
     api::Client,
     config::Config,
     output::{clean, duration},
-    plan::{Plan, Project, Timesheet, days_in_month, validate_month},
+    timesheet::{Project, Timesheet, days_in_month, validate_month},
 };
 use chrono::{Datelike, Local, NaiveDate};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -43,7 +43,6 @@ pub struct Options {
     pub snapshot: bool,
     pub width: u16,
     pub height: u16,
-    pub plan: Option<Plan>,
 }
 pub fn current_month() -> String {
     Local::now().format("%Y-%m").to_string()
@@ -69,21 +68,8 @@ pub fn validate(options: &Options, json: bool) -> Result<(), Error> {
     }
     if json {
         return Err(Error::Usage {
-            message: "tui does not support JSON; use timesheet, balance or plan".into(),
+            message: "tui does not support JSON; use timesheet or projects".into(),
         });
-    }
-    if options.demo && options.plan.is_some() {
-        return Err(Error::Usage {
-            message: "--demo cannot be combined with a real booking plan".into(),
-        });
-    }
-    if let Some(p) = &options.plan {
-        p.validate()?;
-        if p.month != options.month {
-            return Err(Error::InvalidInput {
-                message: "TUI month must match the preview plan".into(),
-            });
-        }
     }
     if !options.snapshot && (!std::io::stdin().is_terminal() || !std::io::stdout().is_terminal()) {
         return Err(Error::TtyRequired {
@@ -95,7 +81,6 @@ pub fn validate(options: &Options, json: bool) -> Result<(), Error> {
 struct Workspace {
     month: String,
     sheet: Timesheet,
-    plan: Option<Plan>,
     activity: usize,
     day: usize,
     query: String,
@@ -119,7 +104,6 @@ impl Workspace {
                 total_minutes: 0,
                 projects: vec![],
             },
-            plan: options.plan.clone(),
             activity: 0,
             day: 0,
             query: String::new(),
@@ -142,31 +126,7 @@ impl Workspace {
             .filter(|d| self.query.is_empty() || d.contains(&self.query))
             .collect()
     }
-    fn planned(&self, date: &str) -> Option<&crate::plan::PlannedDay> {
-        self.plan
-            .as_ref()
-            .filter(|p| self.project().is_some_and(|a| a.id == p.project_id))
-            .and_then(|p| p.days.iter().find(|d| d.date == date))
-    }
     fn accept(&mut self, sheet: Timesheet) {
-        if let Some(p) = &self.plan {
-            if p.employee_id != sheet.employee_id || p.base_url != sheet.base_url {
-                self.error = Some(
-                    "Plan belongs to another account. Reopen with the correct credentials.".into(),
-                );
-                self.loading = false;
-                self.plan = None;
-                return;
-            }
-            let Some(index) = sheet.projects.iter().position(|a| a.id == p.project_id) else {
-                self.error = Some("Plan activity no longer exists. Generate a new plan.".into());
-                self.loading = false;
-                self.plan = None;
-                self.sheet = sheet;
-                return;
-            };
-            self.activity = index;
-        }
         self.sheet = sheet;
         self.activity = self
             .activity
@@ -206,7 +166,7 @@ fn draw(frame: &mut Frame, app: &mut Workspace) {
         return;
     }
     let parts = Layout::vertical([
-        Constraint::Length(if app.plan.is_some() { 4 } else { 3 }),
+        Constraint::Length(3),
         Constraint::Min(5),
         Constraint::Length(2),
     ])
@@ -232,23 +192,7 @@ fn draw(frame: &mut Frame, app: &mut Workspace) {
             duration(i64::from(app.sheet.total_minutes))
         )),
     ]);
-    let mut header = vec![title, Line::styled(mode, Style::default().fg(MUTED))];
-    if let Some(plan) = &app.plan
-        && let Ok(b) = plan.balance()
-    {
-        header.push(Line::styled(
-            format!(
-                "Plan balance  {} {}",
-                crate::output::magnitude(b.balance_minutes),
-                if b.balance_minutes < 0 {
-                    "debt"
-                } else {
-                    "surplus"
-                }
-            ),
-            Style::default().fg(TEAL),
-        ));
-    }
+    let header = vec![title, Line::styled(mode, Style::default().fg(MUTED))];
     frame.render_widget(Paragraph::new(header), parts[0]);
     let cols = if area.width >= 105 {
         Layout::horizontal([
@@ -304,8 +248,6 @@ fn draw(frame: &mut Frame, app: &mut Workspace) {
                 .copied()
                 .unwrap_or(0);
             let locked = app.project().is_some_and(|p| p.locked_days.contains(date));
-            let plan = app.planned(date);
-            let changed = plan.is_some_and(|p| u32::from(p.hours) * 60 != booked);
             let weekday = NaiveDate::parse_from_str(date, "%Y-%m-%d")
                 .map(|d| d.format("%a").to_string())
                 .unwrap_or_default();
@@ -314,15 +256,8 @@ fn draw(frame: &mut Frame, app: &mut Workspace) {
             } else {
                 format!("{} {weekday}", &date[5..])
             };
-            let planned = plan
-                .map(|p| duration(i64::from(p.hours) * 60))
-                .unwrap_or_else(|| "—".into());
             let state = if locked {
                 "locked"
-            } else if changed {
-                "change"
-            } else if plan.is_some() {
-                "same"
             } else if booked == 0 {
                 "—"
             } else {
@@ -335,16 +270,9 @@ fn draw(frame: &mut Frame, app: &mut Workspace) {
                 } else {
                     duration(i64::from(booked))
                 }),
-                Cell::from(planned),
                 Cell::from(state),
             ])
-            .style(Style::default().fg(if changed {
-                AMBER
-            } else if booked == 0 {
-                MUTED
-            } else {
-                INK
-            }))
+            .style(Style::default().fg(if booked == 0 { MUTED } else { INK }))
         })
         .collect();
     let name = app
@@ -377,13 +305,12 @@ fn draw(frame: &mut Frame, app: &mut Workspace) {
             rows,
             [
                 Constraint::Length(if area.width < 75 { 11 } else { 18 }),
-                Constraint::Length(7),
-                Constraint::Length(7),
+                Constraint::Length(9),
                 Constraint::Min(7),
             ],
         )
         .header(
-            Row::new(["DATE", "BOOKED", "PLAN", "STATE"])
+            Row::new(["DATE", "BOOKED", "STATE"])
                 .style(Style::default().fg(MUTED))
                 .bottom_margin(1),
         )
@@ -448,12 +375,8 @@ fn draw(frame: &mut Frame, app: &mut Workspace) {
         Line::from(format!("Date filter: {} · Esc clears", app.query))
     } else {
         Line::from(Span::styled(
-            if app.details && app.plan.is_some() {
-                "Plan dates only · Enter returns"
-            } else if app.details {
+            if app.details {
                 "Enter returns to ledger · no writes"
-            } else if app.plan.is_some() {
-                "Plan dates only · no writes"
             } else {
                 "Read only · bookings are never changed here"
             },
@@ -483,7 +406,7 @@ fn draw(frame: &mut Frame, app: &mut Workspace) {
             area.height.saturating_sub(2).min(15),
         );
         frame.render_widget(Clear, popup);
-        frame.render_widget(Paragraph::new("? / Esc     Close help\n↑↓ / j k    Select a day\nPgUp/PgDn   Move ten days\nHome / End  First / last day\nEnter       Detail / ledger\nTab / S-Tab Next / prev activity\n[ / ]       Previous / next month\n/           Find date; Enter keeps\nEsc         Clear date filter\nr           Refresh timesheet\nq / Ctrl-C  Quit\nRead only. Apply bookings with CLI.").block(Block::bordered().title(" Keyboard guide ")).style(Style::default().fg(INK).bg(BG)),popup);
+        frame.render_widget(Paragraph::new("? / Esc     Close help\n↑↓ / j k    Select a day\nPgUp/PgDn   Move ten days\nHome / End  First / last day\nEnter       Detail / ledger\nTab / S-Tab Next / prev activity\n[ / ]       Previous / next month\n/           Find date; Enter keeps\nEsc         Clear date filter\nr           Refresh timesheet\nq / Ctrl-C  Quit\nRead only. No bookings are changed.").block(Block::bordered().title(" Keyboard guide ")).style(Style::default().fg(INK).bg(BG)),popup);
     }
 }
 fn detail(frame: &mut Frame, app: &Workspace, date: Option<&str>, area: Rect, scroll: u16) -> u16 {
@@ -503,69 +426,12 @@ fn detail(frame: &mut Frame, app: &Workspace, date: Option<&str>, area: Rect, sc
             "Booked       {}",
             duration(i64::from(booked))
         )));
-        if let Some(p) = app.planned(date) {
-            lines.push(Line::raw(format!(
-                "Actual       {}",
-                duration(i64::from(p.actual_minutes))
-            )));
-            lines.push(Line::styled(
-                format!("Planned      {}", duration(i64::from(p.hours) * 60)),
-                Style::default().fg(AMBER),
-            ));
-            if p.before_minutes != booked && u32::from(p.hours) * 60 != booked {
-                lines.push(Line::styled(
-                    "STALE · regenerate plan",
-                    Style::default().fg(AMBER),
-                ));
-            }
-        }
         lines.push(Line::raw(
             if app.project().is_some_and(|p| p.locked_days.contains(date)) {
                 "State        locked"
             } else {
                 "State        open"
             },
-        ));
-    }
-    if let Some(plan) = &app.plan {
-        lines.push(Line::raw(""));
-        lines.push(Line::styled("Projected balance", Style::default().fg(TEAL)));
-        if let Ok(b) = plan.balance() {
-            lines.push(Line::raw(format!(
-                "{} {}",
-                crate::output::magnitude(b.balance_minutes),
-                if b.balance_minutes < 0 {
-                    "debt"
-                } else {
-                    "surplus"
-                }
-            )));
-            lines.push(Line::raw(format!(
-                "Actual       {}",
-                duration(b.actual_minutes)
-            )));
-            lines.push(Line::raw(format!(
-                "Planned      {}",
-                duration(b.booked_minutes)
-            )));
-            lines.push(Line::raw(format!(
-                "Opening      {}",
-                duration(b.opening_balance_minutes)
-            )));
-        }
-        lines.push(Line::raw(""));
-        lines.push(Line::styled(
-            "Includes plan dates only.",
-            Style::default().fg(MUTED),
-        ));
-    } else {
-        lines.push(Line::raw(""));
-        lines.push(Line::styled(
-            "Compare with actual work",
-            Style::default().fg(TEAL),
-        ));
-        lines.push(Line::raw(
-            "Open with --plan FILE to see actual hours, proposed bookings and balance.",
         ));
     }
     let line_count = lines
@@ -592,7 +458,7 @@ pub fn demo(month: &str) -> Timesheet {
             .weekday()
             .number_from_monday();
         let minutes = if wd <= 5 && d <= 16 {
-            if d == 11 { 240 } else { 480 }
+            [450, 390, 480][d as usize % 3]
         } else {
             0
         };
@@ -625,33 +491,9 @@ pub fn demo(month: &str) -> Timesheet {
         ],
     }
 }
-fn demo_plan(sheet: &Timesheet) -> Plan {
-    Plan {
-        version: 1,
-        base_url: sheet.base_url.clone(),
-        employee_id: sheet.employee_id.clone(),
-        month: sheet.month.clone(),
-        project_id: "demo-delivery".into(),
-        opening_balance_minutes: 450,
-        days: [(11, 345), (12, 480)]
-            .into_iter()
-            .map(|(d, actual)| {
-                let date = format!("{}-{d:02}", sheet.month);
-                let before = sheet.projects[0].days[&date];
-                crate::plan::PlannedDay {
-                    date,
-                    actual_minutes: actual,
-                    before_minutes: before,
-                    hours: 8,
-                }
-            })
-            .collect(),
-    }
-}
 pub fn snapshot(options: &Options) -> Result<String, Error> {
     let mut app = Workspace::new(options);
     app.accept(demo(&options.month));
-    app.plan = Some(demo_plan(&app.sheet));
     app.day = 10;
     let backend = TestBackend::new(options.width, options.height);
     let mut terminal = Terminal::new(backend).expect("test backend is infallible");
@@ -700,7 +542,6 @@ pub fn run(options: Options) -> Result<(), Error> {
         request.send(app.month.clone()).ok();
     } else {
         app.accept(demo(&app.month));
-        app.plan = Some(demo_plan(&app.sheet));
         app.day = 10;
     }
     let _restore = Restore;
@@ -807,13 +648,6 @@ pub fn run(options: Options) -> Result<(), Error> {
             KeyCode::Char('?') => app.help = true,
             KeyCode::Char('[') | KeyCode::Char(']') | KeyCode::Char('r') => {
                 if key.code != KeyCode::Char('r') {
-                    if app.plan.is_some() && !app.demo {
-                        app.error = Some(
-                            "Month is fixed to the preview plan. Reopen without --plan to browse."
-                                .into(),
-                        );
-                        continue;
-                    }
                     app.month = shift_month(
                         &app.month,
                         if key.code == KeyCode::Char('[') {
@@ -830,7 +664,6 @@ pub fn run(options: Options) -> Result<(), Error> {
                 app.error = None;
                 if app.demo {
                     app.accept(demo(&app.month));
-                    app.plan = Some(demo_plan(&app.sheet));
                 } else {
                     app.loading = true;
                     request.send(app.month.clone()).ok();
@@ -851,7 +684,6 @@ mod tests {
             snapshot: true,
             width: 120,
             height: 36,
-            plan: None,
         }
     }
     #[test]
@@ -888,7 +720,6 @@ mod tests {
             if let Ok(dir) = std::env::var("YOOBI_VISUAL_QA") {
                 let mut app = Workspace::new(&o);
                 app.accept(demo(&o.month));
-                app.plan = Some(demo_plan(&app.sheet));
                 app.day = 10;
                 let mut term = Terminal::new(TestBackend::new(width, height)).unwrap();
                 term.draw(|f| draw(f, &mut app)).unwrap();
@@ -924,7 +755,6 @@ mod tests {
     fn smallest_help_filter_detail_and_error_states_are_complete() {
         let mut app = Workspace::new(&opts());
         app.accept(demo("2026-11"));
-        app.plan = Some(demo_plan(&app.sheet));
         app.day = 10;
         app.help = true;
         let s = state_screen(&mut app, "help-40x16");
@@ -939,48 +769,19 @@ mod tests {
         app.query.clear();
         app.details = true;
         let s = state_screen(&mut app, "detail-top-40x16");
-        assert!(s.contains("Actual"));
-        assert!(s.contains("5h45"));
-        assert!(s.contains("Plan dates only"));
+        assert!(s.contains("Booked"));
+        assert!(s.contains("8h00"));
+        assert!(!s.contains("Actual"));
         app.detail_scroll = u16::MAX;
         let s = state_screen(&mut app, "detail-bottom-40x16");
-        assert!(s.contains("Opening"));
-        assert!(s.contains("Includes plan dates only"));
+        assert!(s.contains("State"));
         assert!(app.detail_scroll < 20);
         app.details = false;
-        app.error =
-            Some("Plan belongs to another account. Reopen with the correct credentials.".into());
+        app.error = Some("Yoobi rejected login. Retry with the correct credentials.".into());
         app.error_detail = true;
         let s = state_screen(&mut app, "error-40x16");
         assert!(s.contains("correct credentials"));
         assert!(s.contains("r retry"));
         assert!(!s.contains("Connected"));
-    }
-    #[test]
-    fn missing_plan_activity_is_reported_without_a_misleading_balance() {
-        let sheet = demo("2026-11");
-        let mut plan = demo_plan(&sheet);
-        plan.project_id = "removed".into();
-        let mut app = Workspace::new(&opts());
-        app.plan = Some(plan);
-        app.accept(sheet);
-        assert!(app.error.is_some());
-        assert!(app.plan.is_none());
-    }
-    #[test]
-    fn account_mismatch_never_exposes_plan() {
-        let mut a = Workspace::new(&opts());
-        a.plan = Some(Plan {
-            version: 1,
-            base_url: "https://other.invalid".into(),
-            employee_id: "other".into(),
-            month: "2026-11".into(),
-            project_id: "demo-delivery".into(),
-            opening_balance_minutes: 0,
-            days: vec![],
-        });
-        a.accept(demo("2026-11"));
-        assert!(a.error.is_some());
-        assert!(a.sheet.projects.is_empty());
     }
 }

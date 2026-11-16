@@ -21,7 +21,7 @@ fn error(output: &std::process::Output) -> serde_json::Value {
         .clone()
 }
 #[test]
-fn schema_is_discoverable_and_marks_apply_as_mutating() {
+fn schema_is_discoverable_and_timesheet_commands_are_read_only() {
     let out = run(&["schema"]);
     assert!(out.status.success());
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
@@ -31,7 +31,8 @@ fn schema_is_discoverable_and_marks_apply_as_mutating() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|c| c["name"] == "apply" && c["mutating"] == true)
+            .filter(|c| matches!(c["name"].as_str(), Some("timesheet" | "projects" | "tui")))
+            .all(|c| c["effects"] == "read_only")
     );
 }
 #[test]
@@ -43,8 +44,14 @@ fn help_and_completions_work_without_authentication() {
     }
 }
 #[test]
-fn missing_command_and_apply_without_approval_are_usage_errors() {
-    for args in [&[][..], &["apply", "/path/does/not/exist"][..]] {
+fn missing_and_removed_commands_are_usage_errors() {
+    for args in [
+        &[][..],
+        &["apply"][..],
+        &["plan"][..],
+        &["balance"][..],
+        &["tui", "--plan", "unused.json"][..],
+    ] {
         let out = run(args);
         assert_eq!(out.status.code(), Some(3));
         assert_eq!(error(&out)["kind"], "usage");
@@ -68,43 +75,6 @@ fn auth_status_is_local_and_does_not_print_credentials() {
     let stdout = String::from_utf8(out.stdout).unwrap();
     assert!(!stdout.contains("SECRET_NEVER_PRINT"));
     assert!(!stdout.contains("PRIVATE_USER"));
-}
-#[test]
-fn balance_and_dry_run_work_offline() {
-    let path = std::env::temp_dir().join(format!("yoobi-cli-test-{}.json", std::process::id()));
-    std::fs::write(&path,r#"{"version":1,"base_url":"https://tenant.yoobi.nl","employee_id":"employee","month":"2026-11","project_id":"activity","opening_balance_minutes":450,"days":[{"date":"2026-11-06","actual_minutes":345,"before_minutes":0,"hours":8}]}"#).unwrap();
-    let out = run(&["balance", path.to_str().unwrap()]);
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(v["balance_minutes"], 315);
-    let out = run(&["apply", path.to_str().unwrap(), "--dry-run"]);
-    assert!(out.status.success());
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(v["dry_run"], true);
-    let _ = std::fs::remove_file(path);
-}
-
-#[test]
-fn text_output_is_a_real_ledger_and_handles_extreme_debt() {
-    let path = std::env::temp_dir().join(format!("yoobi-text-{}.json", std::process::id()));
-    std::fs::write(
-        &path,
-        r#"{"opening_balance_minutes":-9223372036854775808,"days":[]}"#,
-    )
-    .unwrap();
-    let out = run(&["balance", path.to_str().unwrap(), "--output", "text"]);
-    assert!(out.status.success());
-    let s = String::from_utf8(out.stdout).unwrap();
-    assert!(s.contains("debt"));
-    assert!(s.contains("Opening balance"));
-    assert!(!s.starts_with('{'));
-    let out = run(&["--output", "text", "balance", path.to_str().unwrap()]);
-    assert!(out.status.success());
-    std::fs::remove_file(path).unwrap();
 }
 #[cfg(unix)]
 #[test]

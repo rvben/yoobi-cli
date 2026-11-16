@@ -1,14 +1,6 @@
 use mockito::{Matcher, Server};
 use serde_json::json;
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
-};
-use yoobi_cli::{
-    api::Client,
-    config::Config,
-    plan::{Plan, PlannedDay},
-};
+use yoobi_cli::{api::Client, config::Config};
 
 fn grid(hours: u8, locked: bool) -> String {
     let mut decl = vec![json!({"d":1})];
@@ -46,22 +38,6 @@ fn login(server: &mut Server) -> Client {
         .create();
     Client::new(&Config::new(&server.url(), "user".into(), "secret".into()).unwrap()).unwrap()
 }
-fn plan(server: &Server) -> Plan {
-    Plan {
-        version: 1,
-        base_url: server.url(),
-        employee_id: "employee".into(),
-        month: "2026-11".into(),
-        project_id: "activity".into(),
-        opening_balance_minutes: 0,
-        days: vec![PlannedDay {
-            date: "2026-11-02".into(),
-            actual_minutes: 345,
-            before_minutes: 0,
-            hours: 8,
-        }],
-    }
-}
 #[test]
 fn reads_month_totals_over_one_day() {
     let mut s = Server::new();
@@ -78,97 +54,6 @@ fn reads_month_totals_over_one_day() {
         .with_body(html)
         .create();
     assert_eq!(c.timesheet("2026-11").unwrap().total_minutes, 1920);
-}
-#[test]
-fn saves_exact_payload_and_verifies_fresh_read() {
-    let mut s = Server::new();
-    let c = login(&mut s);
-    let p = plan(&s);
-    let calls = Arc::new(AtomicUsize::new(0));
-    let count = calls.clone();
-    s.mock("POST", "/timesheet/timesheet")
-        .with_body_from_request(move |_| {
-            grid(
-                if count.fetch_add(1, Ordering::SeqCst) == 0 {
-                    0
-                } else {
-                    8
-                },
-                false,
-            )
-            .into_bytes()
-        })
-        .expect(2)
-        .create();
-    let payload = json!([{"key":"activity-2026-11-02","value":[{"time":8,"timeMsg":"","p":1,"a":1,"d":2,"ref":"","timediff":8.0,"pID":"project","bFromPlanning":false,"timedifforiginal":8.0}]}]);
-    let save = s
-        .mock("POST", "/declaration/saveDeclarations")
-        .match_body(Matcher::AllOf(vec![
-            Matcher::UrlEncoded("json".into(), payload.to_string()),
-            Matcher::UrlEncoded("employeeID".into(), "employee".into()),
-            Matcher::UrlEncoded("directSave".into(), "true".into()),
-        ]))
-        .with_body(r#"{"messages":[{"type":"success"}]}"#)
-        .expect(1)
-        .create();
-    let result = c.apply(&p).unwrap();
-    assert!(result.verified);
-    assert_eq!(result.changed_days, 1);
-    save.assert();
-    assert_eq!(calls.load(Ordering::SeqCst), 2);
-}
-#[test]
-fn stale_and_locked_plans_never_save() {
-    for (hours, locked) in [(4, false), (0, true)] {
-        let mut s = Server::new();
-        let c = login(&mut s);
-        let p = plan(&s);
-        s.mock("POST", "/timesheet/timesheet")
-            .with_body(grid(hours, locked))
-            .create();
-        let save = s
-            .mock("POST", "/declaration/saveDeclarations")
-            .expect(0)
-            .create();
-        assert!(matches!(
-            c.apply(&p),
-            Err(yoobi_cli::Error::Conflict { .. })
-        ));
-        save.assert();
-    }
-}
-#[test]
-fn matching_locked_days_are_idempotent() {
-    let mut s = Server::new();
-    let c = login(&mut s);
-    let p = plan(&s);
-    s.mock("POST", "/timesheet/timesheet")
-        .with_body(grid(8, true))
-        .expect(2)
-        .create();
-    let save = s
-        .mock("POST", "/declaration/saveDeclarations")
-        .expect(0)
-        .create();
-    assert_eq!(c.apply(&p).unwrap().changed_days, 0);
-    save.assert();
-}
-#[test]
-fn successful_acknowledgement_is_not_enough() {
-    let mut s = Server::new();
-    let c = login(&mut s);
-    let p = plan(&s);
-    s.mock("POST", "/timesheet/timesheet")
-        .with_body(grid(0, false))
-        .expect(2)
-        .create();
-    s.mock("POST", "/declaration/saveDeclarations")
-        .with_body(r#"{"messages":[{"type":"success"}]}"#)
-        .create();
-    assert!(matches!(
-        c.apply(&p),
-        Err(yoobi_cli::Error::Conflict { .. })
-    ));
 }
 #[test]
 fn totals_must_agree() {
@@ -225,101 +110,6 @@ fn rejected_login_and_expired_session_are_auth_errors() {
     assert!(!e.to_string().contains("sensitive"));
 }
 #[test]
-fn ambiguous_and_rejected_saves_are_not_retried() {
-    for body in [
-        r#"{"messages":[{"type":"error"}]}"#,
-        r#"{"messages":[]}"#,
-        "not json",
-    ] {
-        let mut s = Server::new();
-        let c = login(&mut s);
-        let p = plan(&s);
-        s.mock("POST", "/timesheet/timesheet")
-            .with_body(grid(0, false))
-            .expect(1)
-            .create();
-        let save = s
-            .mock("POST", "/declaration/saveDeclarations")
-            .with_body(body)
-            .expect(1)
-            .create();
-        assert!(c.apply(&p).is_err());
-        save.assert();
-    }
-}
-#[test]
-fn save_server_failure_is_uncertain_and_not_retried() {
-    let mut s = Server::new();
-    let c = login(&mut s);
-    let p = plan(&s);
-    s.mock("POST", "/timesheet/timesheet")
-        .with_body(grid(0, false))
-        .create();
-    let save = s
-        .mock("POST", "/declaration/saveDeclarations")
-        .with_status(503)
-        .with_body("private failure message")
-        .expect(1)
-        .create();
-    let e = c.apply(&p).unwrap_err();
-    assert!(e.to_string().contains("may already have changed"));
-    assert!(!e.to_string().contains("private failure"));
-    save.assert();
-}
-#[test]
-fn foreign_employee_or_origin_refused_before_timesheet_request() {
-    let mut s = Server::new();
-    let c = login(&mut s);
-    let mut p = plan(&s);
-    let read = s.mock("POST", "/timesheet/timesheet").expect(0).create();
-    p.employee_id = "another-employee".into();
-    assert!(c.apply(&p).is_err());
-    p.employee_id = "employee".into();
-    p.base_url = "https://other.invalid".into();
-    assert!(c.apply(&p).is_err());
-    read.assert();
-}
-#[test]
-fn notes_and_references_are_preserved_and_unrelated_changes_detected() {
-    let mut s = Server::new();
-    let c = login(&mut s);
-    let p = plan(&s);
-    let calls = Arc::new(AtomicUsize::new(0));
-    let count = calls.clone();
-    s.mock("POST", "/timesheet/timesheet")
-        .with_body_from_request(move |_| {
-            if count.fetch_add(1, Ordering::SeqCst) == 0 {
-                grid(0, false)
-                    .replace("\"timeMsg\":\"\"", "\"timeMsg\":\"existing note\"")
-                    .replace("\"ref\":\"\"", "\"ref\":\"existing ref\"")
-            } else {
-                grid(8, false)
-                    .replace("\"monthTotal\":8", "\"monthTotal\":12")
-                    .replace("daylytotal'>8", "daylytotal'>12")
-                    .replace(
-                        "\"dtdate\":\"2026-11-03\",\"ref\":\"\",\"time\":0",
-                        "\"dtdate\":\"2026-11-03\",\"ref\":\"\",\"time\":4",
-                    )
-            }
-            .into_bytes()
-        })
-        .create();
-    let save = s
-        .mock("POST", "/declaration/saveDeclarations")
-        .match_body(Matcher::AllOf(vec![
-            Matcher::Regex("existing\\+note".into()),
-            Matcher::Regex("existing\\+ref".into()),
-        ]))
-        .with_body(r#"{"messages":[{"type":"success"}]}"#)
-        .expect(1)
-        .create();
-    assert!(matches!(
-        c.apply(&p),
-        Err(yoobi_cli::Error::Conflict { .. })
-    ));
-    save.assert();
-}
-#[test]
 fn multiple_activities_keep_separate_values_and_totals() {
     let mut s = Server::new();
     let c = login(&mut s);
@@ -352,4 +142,22 @@ fn multiple_activities_keep_separate_values_and_totals() {
     assert_eq!(sheet.projects.len(), 2);
     assert_eq!(sheet.projects[0].days["2026-11-02"], 480);
     assert_eq!(sheet.projects[1].days["2026-11-02"], 240);
+}
+
+#[test]
+fn reads_exact_minutes_and_does_not_treat_booking_requirements_as_locks() {
+    let mut s = Server::new();
+    let c = login(&mut s);
+    let html = grid(8, false)
+        .replace("\"time\":8", "\"time\":7.25")
+        .replace("\"monthTotal\":8", "\"monthTotal\":7.25")
+        .replace("daylytotal'>8", "daylytotal'>7.25")
+        .replace("bNoteRequired:false", "bNoteRequired:true");
+    s.mock("POST", "/timesheet/timesheet")
+        .with_body(html)
+        .create();
+    let sheet = c.timesheet("2026-11").unwrap();
+    assert_eq!(sheet.total_minutes, 435);
+    assert_eq!(sheet.projects[0].days["2026-11-02"], 435);
+    assert!(sheet.projects[0].locked_days.is_empty());
 }

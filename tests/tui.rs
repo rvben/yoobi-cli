@@ -12,7 +12,7 @@ fn run(args: &[&str]) -> std::process::Output {
 }
 #[test]
 fn refuses_piped_input_before_auth_or_file_access() {
-    let o = run(&["tui", "--plan", "/not/a/file"]);
+    let o = run(&["tui"]);
     assert_eq!(o.status.code(), Some(6));
     let e: serde_json::Value = serde_json::from_slice(&o.stderr).unwrap();
     assert_eq!(e["error"]["kind"], "tty_required");
@@ -26,6 +26,10 @@ fn demo_snapshot_is_offline_and_clearly_labelled() {
     assert!(s.contains("DEMO"));
     assert!(s.contains("Consultancy / Delivery"));
     assert!(s.contains("locked"));
+    assert!(s.contains("Booked"));
+    assert!(!s.contains("Compare with actual work"));
+    assert!(!s.contains("Projected balance"));
+    assert!(!s.contains("Actual"));
     assert!(!s.contains('\x1b'));
     assert!(o.stderr.is_empty());
 }

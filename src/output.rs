@@ -10,24 +10,10 @@ pub fn duration(minutes: i64) -> String {
         m % 60
     )
 }
-pub fn magnitude(minutes: i64) -> String {
-    let m = minutes.unsigned_abs();
-    format!("{}h{:02}", m / 60, m % 60)
-}
 pub fn clean(s: &str) -> String {
     s.chars().filter(|c| !c.is_control()).collect()
 }
 pub fn text(value: &Value) -> String {
-    if let Some(minutes) = value["balance_minutes"].as_i64() {
-        return format!(
-            "{} {}\n\nActual          {:>10}\nBooked          {:>10}\nOpening balance {:>10}",
-            magnitude(minutes),
-            if minutes < 0 { "debt" } else { "surplus" },
-            duration(value["actual_minutes"].as_i64().unwrap_or(0)),
-            duration(value["booked_minutes"].as_i64().unwrap_or(0)),
-            duration(value["opening_balance_minutes"].as_i64().unwrap_or(0))
-        );
-    }
     if value["saved"] == true && value["verified"] == true {
         return if value["cleanup_pending"] == true {
             "Signed in · password saved in OS credential store. Previous credential cleanup failed."
@@ -51,20 +37,6 @@ pub fn text(value: &Value) -> String {
             "No saved login · run yoobi-cli auth login"
         }
         .into();
-    }
-    if let Some(sheet) = value.get("timesheet") {
-        return format!(
-            "Verified · {} day(s) changed\n\n{}",
-            value["changed_days"],
-            text(sheet)
-        );
-    }
-    if value["dry_run"] == true {
-        return format!(
-            "Preview only · no requests sent\n\n{}\n\n{}",
-            text(&value["plan"]),
-            text(&value["balance"])
-        );
     }
     if let Some(projects) = value["projects"].as_array() {
         let mut out = format!("YOOBI  {}", value["month"].as_str().unwrap_or(""));
@@ -97,22 +69,6 @@ pub fn text(value: &Value) -> String {
         }
         if projects.is_empty() {
             out.push_str("\n\nNo activities in this month.");
-        }
-        return out;
-    }
-    if let Some(days) = value["days"].as_array() {
-        let mut out = format!(
-            "Booking plan · {}\n\nDATE          ACTUAL    CURRENT    PLANNED",
-            value["month"].as_str().unwrap_or("")
-        );
-        for day in days {
-            out.push_str(&format!(
-                "\n{}    {:>6}     {:>6}     {:>6}",
-                day["date"].as_str().unwrap_or(""),
-                duration(day["actual_minutes"].as_i64().unwrap_or(0)),
-                duration(day["before_minutes"].as_i64().unwrap_or(0)),
-                duration(day["hours"].as_i64().unwrap_or(0) * 60)
-            ));
         }
         return out;
     }

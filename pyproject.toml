@@ -5,7 +5,7 @@ build-backend = "maturin"
 [project]
 name = "yoobi-cli"
 dynamic = ["version"]
-description = "Read, plan and verify Yoobi timesheet updates from the command line"
+description = "Read and browse Yoobi timesheets from the command line"
 readme = "README.md"
 requires-python = ">=3.8"
 license = { text = "MIT" }
