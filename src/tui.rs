@@ -296,7 +296,7 @@ fn draw(frame: &mut Frame, app: &mut Workspace) {
     } else if app.loading {
         "Loading…"
     } else if app.error.is_some() {
-        "Attention · e shows details"
+        "Attention · ! shows details"
     } else {
         "Connected"
     };
@@ -479,7 +479,7 @@ fn draw(frame: &mut Frame, app: &mut Workspace) {
     {
         frame.render_widget(Clear, parts[1]);
         frame.render_widget(
-            Paragraph::new(format!("{}\n\ne / Esc back · r refresh", clean(error)))
+            Paragraph::new(format!("{}\n\n! / Esc back · r refresh", clean(error)))
                 .style(Style::default().bg(BG).fg(AMBER))
                 .block(frame_block("Review needed"))
                 .wrap(Wrap { trim: true }),
@@ -488,7 +488,7 @@ fn draw(frame: &mut Frame, app: &mut Workspace) {
     }
     let status = if app.error.is_some() {
         Line::from(Span::styled(
-            "Attention · e details · r refresh",
+            "Attention · ! details · r refresh",
             Style::default().fg(AMBER),
         ))
     } else if app.searching {
@@ -500,9 +500,9 @@ fn draw(frame: &mut Frame, app: &mut Workspace) {
     } else {
         Line::from(Span::styled(
             if app.details {
-                "Enter returns to ledger · b edit booking"
+                "Enter returns to ledger · e edit booking"
             } else {
-                "b edit booking · preview before saving"
+                "e edit booking · preview before saving"
             },
             Style::default().fg(MUTED),
         ))
@@ -530,7 +530,7 @@ fn draw(frame: &mut Frame, app: &mut Workspace) {
             area.height.saturating_sub(2).min(16),
         );
         frame.render_widget(Clear, popup);
-        frame.render_widget(Paragraph::new("? / Esc     Close help\n↑↓ / j k    Select a day\nPgUp/PgDn   Move ten days\nHome / End  First / last day\nEnter       Detail / ledger\nTab / S-Tab Next / prev activity\n[ / ]       Previous / next month\n/           Find date; Enter keeps\nEsc         Clear date filter\nr           Refresh timesheet\nb           Edit selected booking\nq / Ctrl-C  Quit").block(Block::bordered().title(" Keyboard guide ")).style(Style::default().fg(INK).bg(BG)),popup);
+        frame.render_widget(Paragraph::new("? / Esc     Close help\n↑↓ / j k    Select a day\nPgUp/PgDn   Move ten days\nHome / End  First / last day\nEnter       Detail / ledger\nTab / S-Tab Next / prev activity\n[ / ]       Previous / next month\n/           Find date; Enter keeps\nEsc         Clear date filter\nr           Refresh timesheet\ne           Edit selected booking\nq / Ctrl-C  Quit").block(Block::bordered().title(" Keyboard guide ")).style(Style::default().fg(INK).bg(BG)),popup);
     }
     draw_editor(frame, app);
 }
@@ -896,12 +896,12 @@ pub fn run(options: Options) -> Result<(), Error> {
         }
         match key.code {
             KeyCode::Char('q') => break,
-            KeyCode::Char('b') => app.begin_edit(),
+            KeyCode::Char('e') => app.begin_edit(),
             KeyCode::Enter => {
                 app.details = !app.details;
                 app.detail_scroll = 0;
             }
-            KeyCode::Char('e') if app.error.is_some() => app.error_detail = !app.error_detail,
+            KeyCode::Char('!') if app.error.is_some() => app.error_detail = !app.error_detail,
             KeyCode::Down | KeyCode::Char('j') if app.details => {
                 app.detail_scroll = app.detail_scroll.saturating_add(1)
             }
