@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.1.2](https://github.com/rvben/yoobi-cli/compare/v0.1.1...v0.1.2) - 2026-11-16
+
+### Fixed
+
+- **ci**: use supported macOS release runners ([188328f](https://github.com/rvben/yoobi-cli/commit/188328fbd901d9c0756ff9507323cee8e28a294a))
+
 ## [0.1.1] - 2026-11-16
 
 ### Added
