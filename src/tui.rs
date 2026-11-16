@@ -680,7 +680,7 @@ pub fn run(options: Options) -> Result<(), Error> {
     let config = if options.demo {
         None
     } else {
-        Some(Config::from_env()?)
+        Some(Config::load()?)
     };
     let mut app = Workspace::new(&options);
     let (request, requests) = mpsc::channel::<String>();

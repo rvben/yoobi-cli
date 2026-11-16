@@ -32,6 +32,12 @@ pub fn contract() -> Value {
     let mut commands = contract["commands"].as_array().unwrap().clone();
     commands.retain(|c| c["name"] != "auth");
     commands.insert(0,json!({"name":"auth status","description":"Inspect local credential configuration without network access.","mutating":false}));
+    commands.push(json!({"name":"auth login","description":"Verify credentials with Yoobi and save the password in the OS credential store.","mutating":true,"args":[
+        {"name":"--base-url","type":"string","description":"Yoobi HTTPS origin; prompts if missing"},
+        {"name":"--username","type":"string","description":"Yoobi username; prompts if missing"},
+        {"name":"--password-stdin","type":"boolean","description":"Read the password from stdin; conflicts with environment password sources"}
+    ]}));
+    commands.push(json!({"name":"auth logout","description":"Remove this CLI's saved login from local metadata and the OS credential store. Environment credentials remain available.","mutating":true}));
     commands.push(json!({"name":"tui","description":"Keyboard timesheet browser with daily detail and booking-plan preview. Never saves bookings.","effects":"read_only","output_kind":"opaque","media_type":"text/plain","requires_tty":true,"args":[
         {"name":"--month","type":"string","description":"YYYY-MM; defaults to current month"},
         {"name":"--plan","type":"path","description":"Read-only preview of an existing booking plan"},
@@ -43,11 +49,13 @@ pub fn contract() -> Value {
     for cmd in &mut commands {
         let name = cmd["name"].as_str().unwrap().to_owned();
         cmd.as_object_mut().unwrap().remove("subcommands");
-        cmd["effects"] = json!(if name == "apply" {
-            "idempotent"
-        } else {
-            "read_only"
-        });
+        cmd["effects"] = json!(
+            if matches!(name.as_str(), "apply" | "auth login" | "auth logout") {
+                "idempotent"
+            } else {
+                "read_only"
+            }
+        );
         if name == "completions" {
             cmd["output_kind"] = json!("opaque");
             cmd["media_type"] = json!("text/plain");
@@ -93,6 +101,13 @@ pub fn contract() -> Value {
                 ["opening_balance_minutes", "integer"],
                 ["balance_minutes", "integer"]
             ]),
+            "auth login" => json!([
+                ["saved", "boolean"],
+                ["verified", "boolean"],
+                ["source", "string"],
+                ["cleanup_pending", "boolean"]
+            ]),
+            "auth logout" => json!([["saved", "boolean"], ["removed", "boolean"]]),
             "auth status" => json!([
                 ["configured", "boolean"],
                 ["source", "string"],

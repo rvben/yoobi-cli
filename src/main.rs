@@ -60,7 +60,7 @@ enum Command {
     },
     /// Calculate actual minus booked minutes from a ledger or booking plan, offline.
     Balance { file: std::path::PathBuf },
-    /// Inspect local credential availability without printing secrets.
+    /// Save, inspect or remove a login in the OS credential store.
     Auth {
         #[command(subcommand)]
         command: AuthCommand,
@@ -90,6 +90,18 @@ enum Command {
 }
 #[derive(Subcommand)]
 enum AuthCommand {
+    /// Verify credentials and save a reusable login in the OS credential store.
+    Login {
+        #[arg(long)]
+        base_url: Option<String>,
+        #[arg(long)]
+        username: Option<String>,
+        /// Read password from stdin instead of prompting (never pass it as an argument).
+        #[arg(long)]
+        password_stdin: bool,
+    },
+    /// Forget the saved login. Explicit environment credentials remain unaffected.
+    Logout,
     Status,
 }
 
@@ -102,7 +114,7 @@ fn read<T: DeserializeOwned>(path: &Path) -> Result<T, Error> {
     })
 }
 fn client() -> Result<Client, Error> {
-    Client::new(&Config::from_env()?)
+    Client::new(&Config::load()?)
 }
 fn dispatch(command: Command) -> Result<Value, Error> {
     match command {
@@ -154,6 +166,17 @@ fn dispatch(command: Command) -> Result<Value, Error> {
             };
             Ok(json!(balance))
         }
+        Command::Auth {
+            command:
+                AuthCommand::Login {
+                    base_url,
+                    username,
+                    password_stdin,
+                },
+        } => yoobi_cli::auth::login(base_url, username, password_stdin),
+        Command::Auth {
+            command: AuthCommand::Logout,
+        } => yoobi_cli::auth::forget(),
         Command::Auth {
             command: AuthCommand::Status,
         } => Ok(Config::status()),

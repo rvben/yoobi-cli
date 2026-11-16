@@ -28,11 +28,27 @@ pub fn text(value: &Value) -> String {
             duration(value["opening_balance_minutes"].as_i64().unwrap_or(0))
         );
     }
+    if value["saved"] == true && value["verified"] == true {
+        return if value["cleanup_pending"] == true {
+            "Signed in · password saved in OS credential store. Previous credential cleanup failed."
+        } else {
+            "Signed in · password saved in OS credential store"
+        }
+        .into();
+    }
+    if value.get("removed").is_some() {
+        return if value["removed"] == true {
+            "Saved login removed"
+        } else {
+            "No saved login"
+        }
+        .into();
+    }
     if let Some(configured) = value["configured"].as_bool() {
         return if configured {
             "Credentials configured · run timesheet to verify login"
         } else {
-            "Credentials missing · set YOOBI_BASE_URL, YOOBI_USERNAME and a password source"
+            "No saved login · run yoobi-cli auth login"
         }
         .into();
     }

@@ -38,7 +38,7 @@ impl Error {
         match self {
             Self::Usage { .. } | Self::InvalidInput { .. } => Some("see `yoobi-cli --help`"),
             Self::Auth { .. } => Some(
-                "set YOOBI_BASE_URL, YOOBI_USERNAME, and YOOBI_PASSWORD or YOOBI_PASSWORD_FILE",
+                "run `yoobi-cli auth login`, or set YOOBI_BASE_URL, YOOBI_USERNAME, and a password source",
             ),
             Self::Conflict { .. } => {
                 Some("read the timesheet and generate a new plan; do not blindly retry a write")
@@ -46,9 +46,9 @@ impl Error {
             Self::Network { .. } | Self::Protocol { .. } => {
                 Some("after an interrupted apply, read the timesheet before retrying")
             }
-            Self::TtyRequired { .. } => {
-                Some("run in a terminal, or use `tui --demo --snapshot` for an offline preview")
-            }
+            Self::TtyRequired { .. } => Some(
+                "run the interactive command in a terminal; scripts can use auth login --password-stdin or tui --demo --snapshot",
+            ),
             Self::Io { .. } => None,
         }
     }
