@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.1.4](https://github.com/rvben/yoobi-cli/compare/v0.1.3...v0.1.4) - 2026-11-16
+
+### Added
+
+- add exact booking edits with preview and verification ([4acacd3](https://github.com/rvben/yoobi-cli/commit/4acacd32abdf5a55a63f91af24a7c7728604e212))
+
+### Fixed
+
+- **tui**: use e to edit bookings ([fa91a43](https://github.com/rvben/yoobi-cli/commit/fa91a439014e8ccc7710ea620aa87dab70237cc0))
+
 ## [0.1.3](https://github.com/rvben/yoobi-cli/compare/v0.1.2...v0.1.3) - 2026-11-16
 
 ### Changed
