@@ -17,6 +17,10 @@ pub enum Error {
     Protocol { message: String },
     #[error("{message}")]
     Io { message: String },
+    #[error("{message}")]
+    Conflict { message: String },
+    #[error("{message}")]
+    SaveUncertain { message: String },
 }
 
 impl Error {
@@ -29,6 +33,8 @@ impl Error {
             Self::Network { .. } => "network",
             Self::Protocol { .. } => "protocol",
             Self::Io { .. } => "io",
+            Self::Conflict { .. } => "conflict",
+            Self::SaveUncertain { .. } => "save_uncertain",
         }
     }
     pub fn hint(&self) -> Option<&'static str> {
@@ -43,6 +49,10 @@ impl Error {
             Self::TtyRequired { .. } => Some(
                 "run the interactive command in a terminal; scripts can use auth login --password-stdin or tui --demo --snapshot",
             ),
+            Self::Conflict { .. } => Some("refresh the timesheet and review a new booking preview"),
+            Self::SaveUncertain { .. } => {
+                Some("read the timesheet before retrying; this save was not retried")
+            }
             Self::Io { .. } => None,
         }
     }
@@ -51,6 +61,8 @@ impl Error {
             Self::Usage { .. } => 3,
             Self::TtyRequired { .. } => 6,
             Self::Auth { .. } => 4,
+            Self::Conflict { .. } => 5,
+            Self::SaveUncertain { .. } => 7,
             _ => 1,
         }
     }

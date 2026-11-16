@@ -32,17 +32,29 @@ pub fn contract() -> Value {
         {"name":"--password-stdin","type":"boolean","description":"Read the password from stdin; conflicts with environment password sources"}
     ]}));
     commands.push(json!({"name":"auth logout","description":"Remove this CLI's saved login from local metadata and the OS credential store. Environment credentials remain available.","mutating":true}));
-    commands.push(json!({"name":"tui","description":"Read-only timesheet browser with daily booked hours and lock states.","effects":"read_only","output_kind":"opaque","media_type":"text/plain","requires_tty":true,"args":[
+    commands.push(json!({"name":"booking preview","description":"Read a booking and preview an exact new total without saving.","mutating":false,"args":[
+        {"name":"--activity","type":"string","required":true,"description":"Activity ID from projects"},
+        {"name":"--date","type":"string","required":true,"description":"YYYY-MM-DD"},
+        {"name":"--duration","type":"string","required":true,"description":"Exact duration: 7h30, 7:30 or 450m; 0m clears"}
+    ]}));
+    commands.push(json!({"name":"booking save","description":"Save a reviewed JSON preview and verify the result; refuses stale or locked changes.","mutating":true,"args":[
+        {"name":"file","type":"path","required":true,"description":"JSON from booking preview"},
+        {"name":"--yes","type":"boolean","required":true,"description":"Explicitly authorize this booking change"}
+    ]}));
+    commands.push(json!({"name":"tui","description":"Timesheet browser with exact booking edits, explicit preview and save.","mutating":true,"effects":"idempotent","output_kind":"opaque","media_type":"text/plain","requires_tty":true,"args":[
         {"name":"--month","type":"string","description":"YYYY-MM; defaults to current month"},
         {"name":"--demo","type":"boolean","description":"Use clearly labelled offline sample data"},
         {"name":"--snapshot","type":"boolean","description":"Render one plain-text screen; requires --demo"},
         {"name":"--width","type":"integer","description":"Snapshot width, 40–240", "default":120},
         {"name":"--height","type":"integer","description":"Snapshot height, 16–80", "default":36}
-    ],"extensions":{"snapshot_requires_demo":true,"saves_bookings":false}}));
+    ],"extensions":{"snapshot_requires_demo":true,"saves_bookings":true,"requires_explicit_save":true,"demo_is_offline":true}}));
     for cmd in &mut commands {
         let name = cmd["name"].as_str().unwrap().to_owned();
         cmd.as_object_mut().unwrap().remove("subcommands");
-        cmd["effects"] = json!(if matches!(name.as_str(), "auth login" | "auth logout") {
+        cmd["effects"] = json!(if matches!(
+            name.as_str(),
+            "auth login" | "auth logout" | "booking save" | "tui"
+        ) {
             "idempotent"
         } else {
             "read_only"
@@ -68,6 +80,22 @@ pub fn contract() -> Value {
                 ["month", "string"],
                 ["employee_id", "string"],
                 ["projects", "array"]
+            ]),
+            "booking preview" => json!([
+                ["version", "integer"],
+                ["base_url", "string"],
+                ["employee_id", "string"],
+                ["activity_id", "string"],
+                ["activity_name", "string"],
+                ["date", "string"],
+                ["before_minutes", "integer"],
+                ["minutes", "integer"]
+            ]),
+            "booking save" => json!([
+                ["verified", "boolean"],
+                ["changed", "boolean"],
+                ["booking", "object"],
+                ["timesheet", "object"]
             ]),
             "auth login" => json!([
                 ["saved", "boolean"],
@@ -104,6 +132,10 @@ pub fn contract() -> Value {
                 .collect::<Vec<_>>()
         );
     }
+    contract["errors"].as_array_mut().unwrap().extend([
+        json!({"kind":"conflict","exit_code":5,"retryable":false,"description":"Booking preview is stale, locked, unsupported or belongs to another account."}),
+        json!({"kind":"save_uncertain","exit_code":7,"retryable":false,"description":"A save may have changed the booking; read the timesheet before retrying."})
+    ]);
     contract["commands"] = json!(commands);
     contract["errors"].as_array_mut().unwrap().push(json!({"kind":"tty_required","exit_code":6,"retryable":false,"description":"Interactive command requires terminal stdin and stdout."}));
     contract

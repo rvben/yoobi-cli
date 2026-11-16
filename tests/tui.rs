@@ -64,7 +64,7 @@ fn narrow_layout_preserves_quit_and_navigation() {
     assert!(s.contains("DATE"));
 }
 #[test]
-fn schema_declares_interactive_opaque_read_only_output() {
+fn schema_declares_explicitly_confirmed_interactive_writes() {
     let o = run(&["schema"]);
     let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
     let t = v["commands"]
@@ -73,7 +73,10 @@ fn schema_declares_interactive_opaque_read_only_output() {
         .iter()
         .find(|c| c["name"] == "tui")
         .unwrap();
-    assert_eq!(t["effects"], "read_only");
+    assert_eq!(t["effects"], "idempotent");
+    assert_eq!(t["mutating"], true);
+    assert_eq!(t["extensions"]["requires_explicit_save"], true);
+    assert_eq!(t["extensions"]["demo_is_offline"], true);
     assert_eq!(t["requires_tty"], true);
     assert_eq!(t["output_kind"], "opaque");
 }

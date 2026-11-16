@@ -82,6 +82,23 @@ for width, height in [(120, 36), (40, 16)]:
         assert "Compare with actual work" not in text()
         send(b"\x1b[F")
         expect("State")
+        send(b"b")
+        expect("Edit booking", "Duration:", "Esc cancel")
+        send(b"\x15")
+        send(b"25h\r")
+        expect("max 24h", "Esc cancel")
+        send(b"\x15")
+        send(b"7h17\r")
+        expect("Review booking", "7h17", "s save", "DEMO")
+        send(b"\x1b")
+        expect(absent=("Review booking",))
+        send(b"b")
+        expect("Edit booking")
+        send(b"\x15")
+        send(b"7h17\r")
+        expect("Review booking", "s save")
+        send(b"s")
+        expect("Booked", "7h17", absent=("Review booking",))
         send(b"\x03")
         proc.wait(timeout=3)
         assert proc.returncode == 0
@@ -91,7 +108,7 @@ for width, height in [(120, 36), (40, 16)]:
             json.dumps(
                 {
                     "pty": f"{width}x{height}",
-                    "help_search_months_detail_scroll_ctrl_c": "passed",
+                    "help_search_months_detail_edit_cancel_save_ctrl_c": "passed",
                     "terminal_restored": True,
                 }
             )

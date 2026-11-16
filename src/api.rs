@@ -1,6 +1,7 @@
 //! Native HTTP adapter for Yoobi's classic timesheet protocol (2.30.2).
 use crate::{
     Error,
+    booking::{BookingEdit, BookingResult, conflict},
     config::Config,
     timesheet::{Project, Timesheet},
 };
@@ -21,6 +22,18 @@ pub struct Client {
     http: Http,
     config: Config,
     employee_id: String,
+}
+struct BookingCell {
+    project: String,
+    p: usize,
+    a: usize,
+    d: usize,
+    value: Value,
+    writable: bool,
+}
+struct Snapshot {
+    sheet: Timesheet,
+    cells: BTreeMap<(String, String), BookingCell>,
 }
 fn protocol(message: impl Into<String>) -> Error {
     Error::Protocol {
@@ -128,9 +141,9 @@ impl Client {
         body(r, "read")
     }
     pub fn timesheet(&self, month: &str) -> Result<Timesheet, Error> {
-        self.snapshot(month)
+        Ok(self.snapshot(month)?.sheet)
     }
-    fn snapshot(&self, month: &str) -> Result<Timesheet, Error> {
+    fn snapshot(&self, month: &str) -> Result<Snapshot, Error> {
         crate::timesheet::validate_month(month)?;
         let (year, m) = month
             .split_once('-')
@@ -157,9 +170,142 @@ impl Client {
         let html = body(r, "timesheet read")?;
         parse_grid(&html, &self.config.base_url, &self.employee_id, month)
     }
+    pub fn preview_booking(
+        &self,
+        activity: &str,
+        date: &str,
+        minutes: u32,
+    ) -> Result<BookingEdit, Error> {
+        crate::timesheet::validate_date(date)?;
+        if minutes > 1440 {
+            return Err(crate::booking::invalid("duration exceeds 24 hours"));
+        }
+        let snapshot = self.snapshot(&date[..7])?;
+        let edit = BookingEdit::from_sheet(&snapshot.sheet, activity, date, minutes)?;
+        if edit.before_minutes != edit.minutes
+            && !snapshot
+                .cells
+                .get(&(activity.into(), date.into()))
+                .is_some_and(|c| c.writable)
+        {
+            return Err(conflict(
+                "this activity requires unsupported booking details; edit it in Yoobi",
+            ));
+        }
+        Ok(edit)
+    }
+    /// Explicitly save one reviewed value. Never retries a write.
+    pub fn save_booking(&self, edit: &BookingEdit) -> Result<BookingResult, Error> {
+        edit.validate()?;
+        if edit.base_url != self.config.base_url || edit.employee_id != self.employee_id {
+            return Err(conflict("booking preview belongs to another Yoobi account"));
+        }
+        let before = self.snapshot(edit.month())?;
+        let cell = before
+            .cells
+            .get(&(edit.activity_id.clone(), edit.date.clone()))
+            .ok_or_else(|| conflict("booking activity or date is no longer present"))?;
+        let current = before
+            .sheet
+            .projects
+            .iter()
+            .find(|p| p.id == edit.activity_id)
+            .and_then(|p| p.days.get(&edit.date))
+            .copied()
+            .ok_or_else(|| conflict("booking is missing"))?;
+        // Setting a total is idempotent, including already matching locked entries.
+        if current == edit.minutes {
+            return Ok(BookingResult {
+                verified: true,
+                changed: false,
+                booking: edit.clone(),
+                timesheet: before.sheet,
+            });
+        }
+        if current != edit.before_minutes {
+            return Err(conflict("booked duration changed after this preview"));
+        }
+        if !cell.writable {
+            return Err(conflict(
+                "booking is locked or requires unsupported details; edit it in Yoobi",
+            ));
+        }
+        let note = cell.value["timeMsg"]
+            .as_str()
+            .ok_or_else(|| protocol("booking note has an unsupported format"))?;
+        let reference = cell.value["ref"]
+            .as_str()
+            .ok_or_else(|| protocol("booking reference has an unsupported format"))?;
+        let hours = f64::from(edit.minutes) / 60.0;
+        let diff = (f64::from(edit.minutes) - f64::from(current)) / 60.0;
+        let payload = json!([{"key":format!("{}-{}",edit.activity_id,edit.date),"value":[{
+            "time":hours,"timeMsg":note,"ref":reference,
+            "p":cell.p,"a":cell.a,"d":cell.d,"pID":cell.project,
+            "timediff":diff,"timedifforiginal":diff,"bFromPlanning":false
+        }]}]);
+        let uncertain = || Error::SaveUncertain {
+            message: "save could not be verified; read the timesheet before retrying".into(),
+        };
+        let response = self
+            .http
+            .post(format!(
+                "{}/declaration/saveDeclarations",
+                self.config.base_url
+            ))
+            .form(&[
+                ("json", payload.to_string()),
+                ("employeeID", self.employee_id.clone()),
+                ("directSave", "true".into()),
+            ])
+            .send()
+            .map_err(|_| uncertain())?;
+        let raw = body(response, "save").map_err(|_| uncertain())?;
+        let ack: Value = serde_json::from_str(&raw).map_err(|_| uncertain())?;
+        if !ack["messages"]
+            .as_array()
+            .is_some_and(|ms| !ms.is_empty() && ms.iter().all(|m| m["type"] == "success"))
+        {
+            return Err(uncertain());
+        }
+        let after = self.snapshot(edit.month()).map_err(|_| uncertain())?;
+        let mut expected = before.sheet;
+        expected
+            .projects
+            .iter_mut()
+            .find(|p| p.id == edit.activity_id)
+            .expect("validated activity")
+            .days
+            .insert(edit.date.clone(), edit.minutes);
+        if after.sheet.projects.len() != expected.projects.len()
+            || after.sheet.projects.iter().any(|p| {
+                expected
+                    .projects
+                    .iter()
+                    .find(|e| e.id == p.id)
+                    .is_none_or(|e| e.days != p.days)
+            })
+        {
+            return Err(uncertain());
+        }
+        let saved_cell = after
+            .cells
+            .get(&(edit.activity_id.clone(), edit.date.clone()))
+            .ok_or_else(uncertain)?;
+        if saved_cell.value["timeMsg"] != cell.value["timeMsg"]
+            || saved_cell.value["ref"] != cell.value["ref"]
+        {
+            return Err(uncertain());
+        }
+        Ok(BookingResult {
+            verified: true,
+            changed: true,
+            booking: edit.clone(),
+            timesheet: after.sheet,
+        })
+    }
 }
 
-fn parse_grid(html: &str, base: &str, employee: &str, month: &str) -> Result<Timesheet, Error> {
+fn parse_grid(html: &str, base: &str, employee: &str, month: &str) -> Result<Snapshot, Error> {
     let doc = Html::parse_document(html);
     let node = doc.select(&selector("#stData")).next().ok_or_else(|| {
         protocol("Yoobi did not return timesheet data; session expired or format changed")
@@ -171,7 +317,7 @@ fn parse_grid(html: &str, base: &str, employee: &str, month: &str) -> Result<Tim
         .ok_or_else(|| protocol("missing timesheet projects"))?;
     let date_re = Regex::new(r"date:\s*'(\d{4}-\d{2}-\d{2})'").expect("constant date regex");
     let mut projects = Vec::new();
-    let mut activity_dates = BTreeSet::new();
+    let mut cells = BTreeMap::new();
     let mut total = 0u32;
     for (p, raw) in raw_projects.iter().enumerate().skip(1) {
         let project_id = raw["pID"]
@@ -203,6 +349,10 @@ fn parse_grid(html: &str, base: &str, employee: &str, month: &str) -> Result<Tim
                     "only hour-based timesheet activities are supported",
                 ));
             }
+            let writable_activity = act["allowOvertime"].as_i64() == Some(0)
+                && act["defaultOvertimeID"].as_str() == Some("")
+                && cls.contains("bNoteRequired:false")
+                && cls.contains("alttype:[]");
             let mut locks = BTreeSet::new();
             let mut seen = BTreeSet::new();
             for cell in row.select(&selector("div.cell")) {
@@ -226,10 +376,11 @@ fn parse_grid(html: &str, base: &str, employee: &str, month: &str) -> Result<Tim
                 }
             }
             let mut days = BTreeMap::new();
-            for entry in act["decl"]
+            for (d, entry) in act["decl"]
                 .as_array()
                 .ok_or_else(|| protocol("missing declarations"))?
                 .iter()
+                .enumerate()
                 .skip(1)
             {
                 let date = entry["dtdate"]
@@ -249,7 +400,20 @@ fn parse_grid(html: &str, base: &str, employee: &str, month: &str) -> Result<Tim
                 total = total
                     .checked_add(minutes)
                     .ok_or_else(|| protocol("timesheet total overflow"))?;
-                if !activity_dates.insert((id.clone(), date.to_owned())) {
+                if cells
+                    .insert(
+                        (id.clone(), date.to_owned()),
+                        BookingCell {
+                            project: project_id.into(),
+                            p,
+                            a,
+                            d,
+                            value: entry.clone(),
+                            writable: writable_activity && !locks.contains(date),
+                        },
+                    )
+                    .is_some()
+                {
                     return Err(protocol("ambiguous activity ID"));
                 }
             }
@@ -286,11 +450,14 @@ fn parse_grid(html: &str, base: &str, employee: &str, month: &str) -> Result<Tim
     if total != official || visible != official {
         return Err(protocol("Yoobi month total disagrees with daily entries"));
     }
-    Ok(Timesheet {
-        base_url: base.into(),
-        employee_id: employee.into(),
-        month: month.into(),
-        total_minutes: official,
-        projects,
+    Ok(Snapshot {
+        sheet: Timesheet {
+            base_url: base.into(),
+            employee_id: employee.into(),
+            month: month.into(),
+            total_minutes: official,
+            projects,
+        },
+        cells,
     })
 }

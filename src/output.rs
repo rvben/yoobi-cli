@@ -14,6 +14,26 @@ pub fn clean(s: &str) -> String {
     s.chars().filter(|c| !c.is_control()).collect()
 }
 pub fn text(value: &Value) -> String {
+    if let Some(sheet) = value.get("timesheet") {
+        return format!(
+            "{} · verified\n\n{}",
+            if value["changed"] == true {
+                "Booking saved"
+            } else {
+                "Booking already matches"
+            },
+            text(sheet)
+        );
+    }
+    if value.get("before_minutes").is_some() {
+        return format!(
+            "Booking preview · no changes saved\n\n{}\n{}\n{} → {}\n\nSave JSON output to a file, then use booking save FILE --yes.",
+            clean(value["activity_name"].as_str().unwrap_or("Activity")),
+            value["date"].as_str().unwrap_or(""),
+            duration(value["before_minutes"].as_i64().unwrap_or(0)),
+            duration(value["minutes"].as_i64().unwrap_or(0))
+        );
+    }
     if value["saved"] == true && value["verified"] == true {
         return if value["cleanup_pending"] == true {
             "Signed in · password saved in OS credential store. Previous credential cleanup failed."

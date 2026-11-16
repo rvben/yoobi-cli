@@ -4,7 +4,14 @@ use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use serde_json::{Value, json};
 use std::io::{IsTerminal, Write};
 use std::process::ExitCode;
-use yoobi_cli::{Error, api::Client, config::Config, schema, timesheet::validate_month};
+use yoobi_cli::{
+    Error,
+    api::Client,
+    booking::{BookingEdit, parse_duration},
+    config::Config,
+    schema,
+    timesheet::validate_month,
+};
 
 #[derive(Parser)]
 #[command(
@@ -38,6 +45,11 @@ enum Command {
         #[arg(long)]
         month: String,
     },
+    /// Preview or save an exact booking duration.
+    Booking {
+        #[command(subcommand)]
+        command: BookingCommand,
+    },
     /// Save, inspect or remove a login in the OS credential store.
     Auth {
         #[command(subcommand)]
@@ -45,7 +57,7 @@ enum Command {
     },
     /// Print the machine-readable clispec contract.
     Schema,
-    /// Browse booked hours and locked dates in a read-only keyboard workspace.
+    /// Browse booked hours and explicitly review and save exact booking edits.
     Tui {
         #[arg(long)]
         month: Option<String>,
@@ -62,6 +74,26 @@ enum Command {
     Completions {
         #[arg(value_enum)]
         shell: clap_complete::Shell,
+    },
+}
+#[derive(Subcommand)]
+enum BookingCommand {
+    /// Read the current booking and preview an exact new total; does not save.
+    Preview {
+        #[arg(long)]
+        activity: String,
+        #[arg(long)]
+        date: String,
+        /// Exact total, e.g. 7h30, 7:30 or 450m. Use 0m to clear.
+        #[arg(long)]
+        duration: String,
+    },
+    /// Save a reviewed JSON preview, then read back to verify.
+    Save {
+        file: std::path::PathBuf,
+        /// Explicitly authorize the preview's booking change.
+        #[arg(long, required = true)]
+        yes: bool,
     },
 }
 #[derive(Subcommand)]
@@ -96,6 +128,48 @@ fn dispatch(command: Command) -> Result<Value, Error> {
             Ok(
                 json!({"month":sheet.month,"employee_id":sheet.employee_id,"projects":sheet.projects.iter().map(|p|json!({"id":p.id,"name":p.name})).collect::<Vec<_>>()}),
             )
+        }
+        Command::Booking {
+            command:
+                BookingCommand::Preview {
+                    activity,
+                    date,
+                    duration,
+                },
+        } => {
+            yoobi_cli::timesheet::validate_date(&date)?;
+            let minutes = parse_duration(&duration)?;
+            if activity.trim().is_empty() {
+                return Err(Error::InvalidInput {
+                    message: "activity is required".into(),
+                });
+            }
+            Ok(json!(client()?.preview_booking(&activity, &date, minutes)?))
+        }
+        Command::Booking {
+            command: BookingCommand::Save { file, yes: _ },
+        } => {
+            use std::io::Read;
+            let file = std::fs::File::open(file).map_err(|_| Error::Io {
+                message: "cannot open booking preview".into(),
+            })?;
+            let mut data = String::new();
+            file.take(65537)
+                .read_to_string(&mut data)
+                .map_err(|_| Error::InvalidInput {
+                    message: "cannot read booking preview".into(),
+                })?;
+            if data.len() > 65536 {
+                return Err(Error::InvalidInput {
+                    message: "booking preview exceeds 64 KiB".into(),
+                });
+            }
+            let edit: BookingEdit =
+                serde_json::from_str(&data).map_err(|_| Error::InvalidInput {
+                    message: "invalid booking preview JSON".into(),
+                })?;
+            edit.validate()?;
+            Ok(json!(client()?.save_booking(&edit)?))
         }
         Command::Auth {
             command:

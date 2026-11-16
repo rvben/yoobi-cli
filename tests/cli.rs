@@ -31,7 +31,10 @@ fn schema_is_discoverable_and_timesheet_commands_are_read_only() {
             .as_array()
             .unwrap()
             .iter()
-            .filter(|c| matches!(c["name"].as_str(), Some("timesheet" | "projects" | "tui")))
+            .filter(|c| matches!(
+                c["name"].as_str(),
+                Some("timesheet" | "projects" | "booking preview")
+            ))
             .all(|c| c["effects"] == "read_only")
     );
 }
@@ -95,4 +98,24 @@ fn insecure_password_files_are_rejected_without_leaking_contents() {
     assert!(!String::from_utf8_lossy(&out.stderr).contains("NEVER_PRINT_THIS_PASSWORD"));
     assert!(String::from_utf8_lossy(&out.stderr).contains("chmod 600"));
     std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn booking_requires_approval_and_valid_duration_before_authentication() {
+    let out = run(&["booking", "save", "/not/a/file"]);
+    assert_eq!(out.status.code(), Some(3));
+    for duration in ["7.5", "7h60", "1441m"] {
+        let out = run(&[
+            "booking",
+            "preview",
+            "--activity",
+            "activity",
+            "--date",
+            "2026-11-02",
+            "--duration",
+            duration,
+        ]);
+        assert_eq!(out.status.code(), Some(1));
+        assert_eq!(error(&out)["kind"], "invalid_input");
+    }
 }
