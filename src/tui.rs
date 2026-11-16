@@ -25,12 +25,14 @@ use std::{
     sync::mpsc,
     time::Duration,
 };
-const BG: Color = Color::Rgb(15, 22, 30);
-const INK: Color = Color::Rgb(230, 233, 226);
-const MUTED: Color = Color::Rgb(150, 166, 179);
-const TEAL: Color = Color::Rgb(111, 220, 194);
+const BG: Color = Color::Rgb(23, 23, 24);
+const INK: Color = Color::Rgb(244, 241, 239);
+const MUTED: Color = Color::Rgb(173, 165, 162);
+// Yoobi website brand tokens: --yoobi--red and --yoobi--light-red.
+const YOOBI_RED: Color = Color::Rgb(218, 38, 27);
+const LIGHT_RED: Color = Color::Rgb(248, 212, 209);
 const AMBER: Color = Color::Rgb(245, 196, 112);
-const SELECT: Color = Color::Rgb(29, 55, 62);
+const SELECT: Color = Color::Rgb(74, 37, 34);
 fn io_error(_: std::io::Error) -> Error {
     Error::Io {
         message: "terminal operation failed; terminal state has been restored".into(),
@@ -183,8 +185,11 @@ fn draw(frame: &mut Frame, app: &mut Workspace) {
     };
     let title = Line::from(vec![
         Span::styled(
-            "YOOBI",
-            Style::default().fg(TEAL).add_modifier(Modifier::BOLD),
+            " YOOBI ",
+            Style::default()
+                .fg(Color::White)
+                .bg(YOOBI_RED)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::raw(format!(
             "   {}   /   {} booked",
@@ -225,7 +230,7 @@ fn draw(frame: &mut Frame, app: &mut Workspace) {
                     )),
                 ])
                 .style(if i == app.activity {
-                    Style::default().bg(SELECT).fg(TEAL)
+                    Style::default().bg(SELECT).fg(LIGHT_RED)
                 } else {
                     Style::default().fg(INK)
                 })
@@ -318,7 +323,7 @@ fn draw(frame: &mut Frame, app: &mut Workspace) {
         .row_highlight_style(
             Style::default()
                 .bg(SELECT)
-                .fg(TEAL)
+                .fg(LIGHT_RED)
                 .add_modifier(Modifier::BOLD),
         );
         let mut state = TableState::default().with_selected(if dates.is_empty() {
@@ -393,7 +398,7 @@ fn draw(frame: &mut Frame, app: &mut Workspace) {
                 } else {
                     "↑↓ days  Tab activity  Enter detail  [ ] month  / find  r refresh  ? help  q quit"
                 },
-                Style::default().fg(TEAL),
+                Style::default().fg(LIGHT_RED),
             )),
         ]),
         parts[2],
@@ -414,7 +419,7 @@ fn detail(frame: &mut Frame, app: &Workspace, date: Option<&str>, area: Rect, sc
     if let Some(date) = date {
         lines.push(Line::from(Span::styled(
             date,
-            Style::default().fg(TEAL).add_modifier(Modifier::BOLD),
+            Style::default().fg(LIGHT_RED).add_modifier(Modifier::BOLD),
         )));
         lines.push(Line::raw(""));
         let booked = app
