@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.1.3](https://github.com/rvben/yoobi-cli/compare/v0.1.2...v0.1.3) - 2026-11-16
+
+### Changed
+
+- Focus the CLI on Yoobi timesheet browsing.
+- Use Yoobi brand colors in the terminal interface.
+
 ## [0.1.2](https://github.com/rvben/yoobi-cli/compare/v0.1.1...v0.1.2) - 2026-11-16
 
 ### Fixed

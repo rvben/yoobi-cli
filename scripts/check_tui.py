@@ -50,31 +50,38 @@ for width, height in [(120, 36), (40, 16)]:
         os.write(master, keys)
         pump()
 
+    def expect(*phrases, absent=(), timeout=5):
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            current = text()
+            if all(p in current for p in phrases) and all(p not in current for p in absent):
+                return
+            pump(0.05)
+        raise AssertionError(text())
+
     try:
         pump(0.8)
-        assert "YOOBI" in text(), text()
-        assert "DEMO" in text()
+        expect("YOOBI", "DEMO")
         send(b"?")
-        assert "Keyboard guide" in text()
-        assert "q / Ctrl-C" in text()
-        assert "Refresh timesheet" in text()
+        expect("Keyboard guide", "q / Ctrl-C", "Refresh timesheet")
         send(b"\x1b")
+        expect(absent=("Keyboard guide",))
         send(b"/never\r")
-        assert "No dates match" in text()
-        assert "Date filter" in text()
+        expect("No dates match", "Date filter")
         send(b"\x1b")
+        expect(absent=("Date filter", "Find date"))
         send(b"]")
-        assert "2026-12" in text(), text()
+        expect("2026-12")
         send(b"[")
-        assert "2026-11" in text()
+        expect("2026-11")
         send(b"/2026-11-11\r")
+        expect("Date filter: 2026-11-11")
         send(b"\r")
-        assert "Booked" in text(), text()
-        assert "8h00" in text()
+        expect("Booked", "8h00", "Enter back")
         assert "Actual" not in text()
         assert "Compare with actual work" not in text()
         send(b"\x1b[F")
-        assert "State" in text(), text()
+        expect("State")
         send(b"\x03")
         proc.wait(timeout=3)
         assert proc.returncode == 0
