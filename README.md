@@ -1,0 +1,91 @@
+# yoobi-cli
+
+A native Rust CLI for Yoobi's classic timesheet: read bookings, turn actual work into reviewed 4/8-hour plans, apply them, and calculate debt or surplus. No Chrome dependency.
+
+Build and install locally:
+
+```sh
+cargo install --path . --locked
+```
+
+Configure your Yoobi origin and credentials. The CLI logs in for each invocation and holds session cookies in memory:
+
+```sh
+export YOOBI_BASE_URL=https://your-company.yoobi.nl
+export YOOBI_USERNAME=your-login
+export YOOBI_PASSWORD_FILE="$HOME/.config/yoobi/password"
+# Store the password in that file using your preferred secret manager/editor.
+chmod 600 "$YOOBI_PASSWORD_FILE"
+yoobi-cli auth status
+```
+
+`YOOBI_PASSWORD` is also supported; set only one password source. Password files must be regular files with no group/world permissions. Credentials are never included in output. `auth status` checks local configuration only; `timesheet` verifies login. SSO/MFA-only login is not supported.
+
+```sh
+yoobi-cli projects --month 2026-11
+yoobi-cli timesheet --month 2026-11
+```
+
+Use an activity ID returned by `projects` as `project_id`. Create `work.json` with actual durations in integer minutes:
+
+```json
+{
+  "month": "2026-11",
+  "project_id": "activity-id-from-projects",
+  "opening_balance_minutes": 450,
+  "days": [
+    {"date": "2026-11-02", "actual_minutes": 360},
+    {"date": "2026-11-03", "actual_minutes": 345, "hours": 8},
+    {"date": "2026-11-04", "actual_minutes": 240}
+  ]
+}
+```
+
+By default, positive work under 6 hours rounds to 4; 6 hours or more rounds to 8. Set `hours` explicitly to choose 4 or 8, including the 5h45 → 8h exception. Omit zero-work days. A plan replaces that activity's daily total; it does not add another booking.
+
+```sh
+yoobi-cli plan work.json --output json > plan.json
+yoobi-cli apply plan.json --dry-run
+yoobi-cli balance plan.json --output text
+# After reviewing the plan:
+yoobi-cli apply plan.json --yes
+```
+
+Plans record the origin, employee, and previous daily values. Apply reads fresh data, refuses stale or locked changes, skips already matching entries, then reads again to verify all bookings in the month. It only writes the selected activity and dates. Closing/approving timesheets, overtime, mandatory notes, alternative booking types, and creating activities are unsupported. Existing note/reference values are preserved. The native adapter follows the observed classic Yoobi 2.30.2 routes; format changes fail closed.
+
+Yoobi offers no atomic compare-and-save in this protocol: a concurrent edit between the preflight read and save can race. Avoid editing the same timesheet elsewhere while applying. A network error may occur after a save; inspect the timesheet before retrying. Writes are never automatically retried.
+
+Balance is `opening balance + actual − booked`: positive is surplus, negative is debt. To calculate an independent balance offline, pass a ledger instead of a plan:
+
+```json
+{
+  "opening_balance_minutes": 450,
+  "days": [
+    {"date": "2026-11-02", "actual_minutes": 345, "booked_minutes": 480}
+  ]
+}
+```
+
+
+## Interactive review
+
+```sh
+yoobi-cli tui --demo                    # offline sample and sample plan
+yoobi-cli tui --month 2026-11           # connected, read only
+yoobi-cli tui --plan plan.json         # account-bound plan preview
+yoobi-cli tui --demo --snapshot --month 2026-11 --width 120 --height 36
+```
+
+The TUI shows activities, a daily ledger, lock/change states, actual versus planned hours, and projected surplus/debt. It adapts from 40-column terminals to a three-pane workspace. The demo is always labelled and does not read credentials or send requests. Connected reads happen in a background worker. If a refresh fails, its error stays visible and can be retried.
+
+Use **↑/↓** or **j/k** for days, **Tab/Shift-Tab** for activities, **Enter** for day detail/back, **[ / ]** for months, **/** to find a date, **r** to refresh, **?** for help, and **q** or **Ctrl-C** to quit. Home/End and Page Up/Down work too. In day detail, the movement keys scroll so balances remain reachable in short terminals. Press **e** to expand an error and read its recovery instructions. A real plan fixes the month to prevent mixing accounts or periods. Preview balance includes only the plan dates and its opening carry. The TUI never writes bookings; review then use `apply plan.json --yes`.
+
+Interactive use requires terminal stdin and stdout. Piped calls fail before authentication. The bounded, plain-text snapshot mode requires `--demo`; JSON output is available through the regular commands. Human text output uses tables rather than raw JSON. Error code **6** means a terminal is required.
+
+Output is JSON when piped and readable text on a terminal. Override with `--output json|text`. `schema` prints the clispec v0.3 contract; `completions zsh` generates shell completion definitions. Plan files and timesheet output contain account identifiers and should be kept private.
+
+Exit codes: 0 success; 1 input/network/protocol/I/O error; 3 usage error; 4 authentication error; 5 conflict. Errors are JSON envelopes on stderr.
+
+Requires Rust 1.100 or later. Development: `cargo test`, `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`. `uv run --no-project --with pyte scripts/check_tui.py` exercises help, filtering, month navigation, plan detail, scrolling, Ctrl-C and terminal restoration in real pseudo-terminals at 120×36 and 40×16. CI runs this check too. HTTP tests use synthetic fixtures and a local mock server; no real timesheets are changed by tests.
+
+MIT licensed.
