@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.1.5](https://github.com/rvben/yoobi-cli/compare/v0.1.4...v0.1.5) - 2026-11-23
+
+### Fixed
+
+- persist Yoobi timesheet bookings ([43e328e](https://github.com/rvben/yoobi-cli/commit/43e328ebef979938ca712c30ffa32841dcd7da44))
+
 ## [0.1.4](https://github.com/rvben/yoobi-cli/compare/v0.1.3...v0.1.4) - 2026-11-16
 
 ### Added
