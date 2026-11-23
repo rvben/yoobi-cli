@@ -231,7 +231,7 @@ fn saves_exact_minutes_preserves_notes_and_verifies_all_bookings() {
     let diff = (437.0 - 480.0) / 60.0;
     let payload = json!([{"key":"activity-2026-11-02","value":[{"time":437.0/60.0,
         "timeMsg":"existing note","ref":"existing reference","p":1,"a":1,"d":2,"pID":"project",
-        "timediff":diff,"timedifforiginal":diff,"bFromPlanning":false}]}]);
+        "timediff":diff,"timedifforiginal":diff,"bFromPlanning":0}]}]);
     let write = s
         .mock("POST", "/declaration/saveDeclarations")
         .match_body(Matcher::AllOf(vec![
@@ -248,6 +248,56 @@ fn saves_exact_minutes_preserves_notes_and_verifies_all_bookings() {
     write.assert();
     read.assert();
 }
+#[test]
+fn save_matches_the_classic_grid_request() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    let mut server = Server::new();
+    let client = login(&mut server);
+    let booked = Arc::new(AtomicBool::new(false));
+    let state = booked.clone();
+    let reads = server
+        .mock("POST", "/timesheet/timesheet")
+        .with_body_from_request(move |_| {
+            grid(if state.load(Ordering::SeqCst) { 8 } else { 0 }, false).into_bytes()
+        })
+        .expect(3)
+        .create();
+    let writes = server
+        .mock("POST", "/declaration/saveDeclarations")
+        .with_body_from_request(move |request| {
+            let ajax = request
+                .headers()
+                .get("X-Requested-With")
+                .is_some_and(|value| value == "XMLHttpRequest");
+            let body = request.body().unwrap();
+            let payload = url::form_urlencoded::parse(body)
+                .find(|(key, _)| key == "json")
+                .unwrap()
+                .1;
+            let payload: serde_json::Value = serde_json::from_str(&payload).unwrap();
+            if ajax && payload[0]["value"][0]["bFromPlanning"].as_u64() == Some(0) {
+                booked.store(true, Ordering::SeqCst);
+            }
+            // Yoobi can acknowledge a request even when it leaves the sheet unchanged.
+            br#"{"messages":[{"type":"success"}]}"#.to_vec()
+        })
+        .expect(1)
+        .create();
+
+    let preview = client
+        .preview_booking("activity", "2026-11-02", 480)
+        .unwrap();
+    assert_eq!(preview.before_minutes, 0);
+    let result = client.save_booking(&preview).unwrap();
+    assert!(result.verified && result.changed);
+    assert_eq!(result.timesheet.projects[0].days["2026-11-02"], 480);
+    reads.assert();
+    writes.assert();
+}
+
 #[test]
 fn stale_locked_and_unsupported_bookings_never_save() {
     for html in [

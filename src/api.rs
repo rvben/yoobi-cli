@@ -241,7 +241,7 @@ impl Client {
         let payload = json!([{"key":format!("{}-{}",edit.activity_id,edit.date),"value":[{
             "time":hours,"timeMsg":note,"ref":reference,
             "p":cell.p,"a":cell.a,"d":cell.d,"pID":cell.project,
-            "timediff":diff,"timedifforiginal":diff,"bFromPlanning":false
+            "timediff":diff,"timedifforiginal":diff,"bFromPlanning":0
         }]}]);
         let uncertain = || Error::SaveUncertain {
             message: "save could not be verified; read the timesheet before retrying".into(),
@@ -252,6 +252,8 @@ impl Client {
                 "{}/declaration/saveDeclarations",
                 self.config.base_url
             ))
+            // Yoobi's direct save requires the classic grid's AJAX request marker.
+            .header("X-Requested-With", "XMLHttpRequest")
             .form(&[
                 ("json", payload.to_string()),
                 ("employeeID", self.employee_id.clone()),
