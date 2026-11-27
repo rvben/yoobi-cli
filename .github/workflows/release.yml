@@ -239,7 +239,7 @@ jobs:
 
           cat > /tmp/yoobi-cli.rb << 'FORMULA'
           class YoobiCli < Formula
-            desc "Read and browse Yoobi timesheets from the command line"
+            desc "Read and browse Yoobi timesheets from the command-line"
             homepage "https://github.com/rvben/yoobi-cli"
             version "VERSION_NUM"
             license "MIT"
